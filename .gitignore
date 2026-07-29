@@ -12,3 +12,7 @@ benchmark_results.json
 
 # macOS
 .DS_Store
+
+# Generated report intermediates (the PDF itself is committed)
+uncomputation_report.html
+qaoa_results.json
