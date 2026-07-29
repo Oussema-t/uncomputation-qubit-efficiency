@@ -272,6 +272,16 @@ open simulation/index.html          # macOS
 xdg-open simulation/index.html      # Linux
 ```
 
+> **Downloading just one file?** Take `simulation/standalone.html`, not
+> `index.html`. `index.html` loads its logic from `app.js` alongside it, so on its
+> own it renders an empty shell with no circuits and no numbers — it looks broken
+> when it is merely incomplete. `standalone.html` has the JavaScript inlined and
+> works entirely on its own. Regenerate it after editing `app.js`:
+>
+> ```bash
+> python simulation/build_standalone.py
+> ```
+
 Drag the **N** slider (1–10) to update the circuit diagrams, qubit counters, memory
 chart and ancilla inspector. Every number is computed live from an actual complex
 state vector in the page; nothing is pre-baked. The page runs its own internal
@@ -388,6 +398,8 @@ requirements.txt               pinned dependencies
 simulation/
   index.html                   standalone page, light + dark
   app.js                       state-vector simulator + rendering
+  standalone.html              single-file build (JS inlined) -- use this for a one-file download
+  build_standalone.py          regenerates standalone.html from index.html + app.js
   verify_core.js               headless cross-language verification
   fixture.js                   generated problem instance + Python reference values
 ```
