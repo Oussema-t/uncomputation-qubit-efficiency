@@ -1,0 +1,9 @@
+# Pinned to the versions the committed results were produced with.
+#
+# autoray is pinned because PennyLane 0.38 imports `autoray.autoray.NumpyMimic`,
+# which was removed in autoray 0.7+. Without this pin, `import pennylane` fails
+# with AttributeError on a fresh install.
+pennylane==0.38.0
+autoray==0.6.12
+numpy==1.26.4
+matplotlib==3.9.4
