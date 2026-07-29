@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Uncomputation (U&dagger;) &mdash; qubit efficiency</title>
+<style>
+  /* Colour roles come from the validated categorical palette (slots 1 and 2).
+     Semantics are held constant everywhere on the page:
+       garbage/entangled = orange,  clean/reused = blue.
+     Colour follows the entity, never its rank. */
+  :root {
+    color-scheme: light;
+    --surface-0: #f4f3f0;
+    --surface-1: #fcfcfb;
+    --surface-2: #eceae5;
+    --text-primary: #0b0b0b;
+    --text-secondary: #52514e;
+    --text-muted: #7a7873;
+    --rule: #e4e3df;
+    --garbage: #eb6834;
+    --clean: #2a78d6;
+    --garbage-soft: rgba(235, 104, 52, 0.13);
+    --clean-soft: rgba(42, 120, 214, 0.13);
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:where(:not([data-theme="light"])) {
+      color-scheme: dark;
+      --surface-0: #111110;
+      --surface-1: #1a1a19;
+      --surface-2: #242422;
+      --text-primary: #ffffff;
+      --text-secondary: #c3c2b7;
+      --text-muted: #8f8e86;
+      --rule: #34342f;
+      --garbage: #d95926;
+      --clean: #3987e5;
+      --garbage-soft: rgba(217, 89, 38, 0.18);
+      --clean-soft: rgba(57, 135, 229, 0.18);
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --surface-0: #111110;
+    --surface-1: #1a1a19;
+    --surface-2: #242422;
+    --text-primary: #ffffff;
+    --text-secondary: #c3c2b7;
+    --text-muted: #8f8e86;
+    --rule: #34342f;
+    --garbage: #d95926;
+    --clean: #3987e5;
+    --garbage-soft: rgba(217, 89, 38, 0.18);
+    --clean-soft: rgba(57, 135, 229, 0.18);
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 28px 20px 56px;
+    background: var(--surface-0);
+    color: var(--text-primary);
+    font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+  .wrap { max-width: 1240px; margin: 0 auto; }
+
+  header h1 { font-size: 25px; margin: 0 0 6px; letter-spacing: -0.01em; }
+  header p { margin: 0 0 4px; color: var(--text-secondary); max-width: 88ch; }
+  header .eq {
+    font-family: var(--mono); font-size: 13px; color: var(--text-secondary);
+    background: var(--surface-2); padding: 3px 8px; border-radius: 5px;
+    display: inline-block; margin-top: 8px;
+  }
+
+  .card {
+    background: var(--surface-1);
+    border: 1px solid var(--rule);
+    border-radius: 10px;
+    padding: 18px 20px;
+    margin-top: 18px;
+  }
+  .card > h2 {
+    font-size: 12px; text-transform: uppercase; letter-spacing: 0.07em;
+    color: var(--text-muted); margin: 0 0 14px; font-weight: 600;
+  }
+
+  /* ---- controls ---- */
+  .controls { display: flex; flex-wrap: wrap; gap: 26px; align-items: flex-end; }
+  .control { display: flex; flex-direction: column; gap: 7px; }
+  .control label { font-size: 12px; color: var(--text-secondary); }
+  .control input[type="range"] { width: 300px; accent-color: var(--clean); }
+  .control input[type="number"] {
+    width: 96px; padding: 6px 8px; font-family: var(--mono); font-size: 13px;
+    background: var(--surface-2); color: var(--text-primary);
+    border: 1px solid var(--rule); border-radius: 6px;
+  }
+  .readout { font-family: var(--mono); font-size: 20px; }
+  .seg { display: flex; border: 1px solid var(--rule); border-radius: 7px; overflow: hidden; }
+  .seg button {
+    padding: 7px 13px; font-size: 13px; border: 0; cursor: pointer;
+    background: var(--surface-2); color: var(--text-secondary);
+  }
+  .seg button[aria-pressed="true"] { background: var(--clean); color: #fff; }
+  .seg button + button { border-left: 1px solid var(--rule); }
+
+  /* ---- qubit counters ---- */
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 14px; }
+  .tile { border: 1px solid var(--rule); border-radius: 9px; padding: 14px 16px; background: var(--surface-1); }
+  .tile.naive { border-left: 3px solid var(--garbage); }
+  .tile.unc { border-left: 3px solid var(--clean); }
+  .tile h3 { margin: 0 0 10px; font-size: 13px; color: var(--text-secondary); font-weight: 600; }
+  .tile .big { font-family: var(--mono); font-size: 32px; line-height: 1.1; }
+  .tile .sub { font-family: var(--mono); font-size: 12px; color: var(--text-muted); margin-top: 6px; }
+  .tile .sub span { color: var(--text-secondary); }
+
+  /* ---- circuits ---- */
+  .circuits { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+  @media (max-width: 940px) { .circuits { grid-template-columns: 1fr; } }
+  .circuit-title { font-size: 14px; font-weight: 600; margin: 0 0 3px; }
+  .circuit-title.naive { color: var(--garbage); }
+  .circuit-title.unc { color: var(--clean); }
+  .circuit-sub { font-size: 12px; color: var(--text-muted); margin: 0 0 10px; }
+  .scroll { overflow: auto; max-height: 460px; border: 1px solid var(--rule); border-radius: 8px; background: var(--surface-1); }
+  .scroll svg { display: block; }
+
+  /* ---- chart ---- */
+  #chart-wrap { position: relative; overflow-x: auto; }
+  .legend { display: flex; gap: 20px; margin-bottom: 10px; flex-wrap: wrap; }
+  .legend span { display: inline-flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--text-secondary); }
+  .swatch { width: 13px; height: 3px; border-radius: 2px; display: inline-block; }
+  #tooltip {
+    position: absolute; pointer-events: none; opacity: 0; transition: opacity .1s;
+    background: var(--surface-1); border: 1px solid var(--rule); border-radius: 7px;
+    padding: 8px 11px; font-family: var(--mono); font-size: 12px; line-height: 1.5;
+    box-shadow: 0 3px 12px rgba(0,0,0,.14); white-space: nowrap; z-index: 5;
+  }
+
+  /* ---- inspector ---- */
+  .inspect { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 760px) { .inspect { grid-template-columns: 1fr; } }
+  .panel { border: 1px solid var(--rule); border-radius: 9px; padding: 15px 17px; }
+  .panel.before { background: var(--garbage-soft); }
+  .panel.after { background: var(--clean-soft); }
+  .panel h3 { margin: 0 0 4px; font-size: 13.5px; }
+  .panel .stage { font-family: var(--mono); font-size: 11.5px; color: var(--text-muted); margin-bottom: 12px; }
+  .metric { display: flex; justify-content: space-between; align-items: baseline; padding: 5px 0; border-top: 1px solid var(--rule); }
+  .metric:first-of-type { border-top: 0; }
+  .metric .k { font-size: 12.5px; color: var(--text-secondary); }
+  .metric .v { font-family: var(--mono); font-size: 14px; }
+  .meter { height: 6px; border-radius: 3px; background: var(--surface-2); overflow: hidden; margin-top: 3px; }
+  .meter i { display: block; height: 100%; border-radius: 3px; }
+  .badge {
+    display: inline-block; font-size: 11px; font-weight: 600; padding: 2px 8px;
+    border-radius: 20px; font-family: var(--mono);
+  }
+  .badge.bad { background: var(--garbage); color: #fff; }
+  .badge.good { background: var(--clean); color: #fff; }
+
+  .lifecycle { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 14px; font-family: var(--mono); font-size: 11.5px; }
+  .lifecycle b { font-weight: 600; padding: 3px 8px; border-radius: 5px; background: var(--surface-2); color: var(--text-secondary); }
+  .lifecycle b.on { background: var(--clean); color: #fff; }
+  .lifecycle b.on-bad { background: var(--garbage); color: #fff; }
+  .lifecycle i { color: var(--text-muted); font-style: normal; }
+
+  table.dt { border-collapse: collapse; width: 100%; font-family: var(--mono); font-size: 12px; margin-top: 6px; }
+  table.dt th, table.dt td { text-align: right; padding: 4px 9px; border-bottom: 1px solid var(--rule); color: var(--text-secondary); }
+  table.dt th { color: var(--text-muted); font-weight: 600; }
+  table.dt td:first-child, table.dt th:first-child { text-align: left; }
+  details > summary { cursor: pointer; font-size: 12.5px; color: var(--text-secondary); }
+
+  .note { font-size: 12.5px; color: var(--text-muted); margin-top: 12px; }
+  .note code { font-family: var(--mono); background: var(--surface-2); padding: 1px 5px; border-radius: 4px; }
+  #selfcheck { font-family: var(--mono); font-size: 12px; }
+  #selfcheck.ok { color: var(--clean); }
+  #selfcheck.fail { color: var(--garbage); font-weight: 600; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <h1>Uncomputation with U&dagger; &mdash; where the qubits go</h1>
+    <p>
+      A subroutine that computes a value into scratch qubits leaves them
+      <strong>entangled</strong> with the data register. Until they are cleaned up they are
+      <em>garbage</em>: they cannot be reused, and they act as a which-path record that
+      destroys interference. Applying the inverse, <code>U&dagger;</code>, disentangles the
+      scratch and returns it to |0&rang; exactly &mdash; so the same physical qubits serve every step.
+    </p>
+    <p class="eq">U_logical |x&rang; = exp( i &middot; &Sigma;<sub>k</sub> &theta;<sub>k</sub> p<sub>k</sub>(x) ) |x&rang;
+      &nbsp;&mdash;&nbsp; p<sub>k</sub>(x) = conjunction of 3 signed literals, computed via 2 Toffolis into 2 scratch qubits</p>
+  </header>
+
+  <section class="card">
+    <h2>Controls</h2>
+    <div class="controls">
+      <div class="control">
+        <label for="steps">Number of operations N</label>
+        <input type="range" id="steps" min="1" max="10" value="4" step="1">
+      </div>
+      <div class="control">
+        <label>Current N</label>
+        <div class="readout" id="steps-out">4</div>
+      </div>
+      <div class="control">
+        <label for="seed">Seed (defines the predicates)</label>
+        <input type="number" id="seed" value="20240517" min="0" step="1">
+      </div>
+      <div class="control">
+        <label>Scratch inspected at step</label>
+        <div class="seg" id="stage-toggle">
+          <button type="button" data-stage="compute" aria-pressed="true">after compute</button>
+          <button type="button" data-stage="uncompute" aria-pressed="false">after U&dagger;</button>
+        </div>
+      </div>
+    </div>
+    <p class="note">
+      Every number on this page is computed live in your browser from an actual complex
+      state vector &mdash; nothing is pre-baked. See <em>How this is computed</em> at the bottom.
+    </p>
+  </section>
+
+  <section class="card">
+    <h2>Qubit counter</h2>
+    <div class="tiles" id="tiles"></div>
+  </section>
+
+  <section class="card">
+    <h2>Circuit structure</h2>
+    <div class="circuits">
+      <div>
+        <p class="circuit-title naive">Naive accumulation</p>
+        <p class="circuit-sub">A fresh scratch pair per step, never cleaned. Orange wires stay entangled and allocated.</p>
+        <div class="scroll"><svg id="svg-naive"></svg></div>
+      </div>
+      <div>
+        <p class="circuit-title unc">Uncomputation loop</p>
+        <p class="circuit-sub">One scratch pair. Compute &rarr; use &rarr; U&dagger; &rarr; back to |0&rang; &rarr; reuse.</p>
+        <div class="scroll"><svg id="svg-unc"></svg></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>Memory chart &mdash; operations vs required qubits</h2>
+    <div class="legend">
+      <span><i class="swatch" style="background:var(--garbage)"></i> Without uncomputation</span>
+      <span><i class="swatch" style="background:var(--clean)"></i> With uncomputation</span>
+    </div>
+    <div id="chart-wrap">
+      <svg id="chart"></svg>
+      <div id="tooltip"></div>
+    </div>
+    <details>
+      <summary>Table view</summary>
+      <table class="dt" id="chart-table"></table>
+    </details>
+  </section>
+
+  <section class="card">
+    <h2>Ancilla state inspector</h2>
+    <div class="inspect">
+      <div class="panel before" id="panel-before"></div>
+      <div class="panel after" id="panel-after"></div>
+    </div>
+    <div class="lifecycle" id="lifecycle"></div>
+  </section>
+
+  <section class="card">
+    <h2>Logical damage &mdash; does the garbage actually matter?</h2>
+    <p class="note" style="margin-top:0">
+      Comparing each scenario's <strong>data register</strong> against the state the logical
+      operation should produce. On a computational-basis input the garbage is just a
+      deterministic label and costs nothing. On a superposition it records which path the
+      computation took, and the coherence is gone &mdash; uncomputation is then required for
+      <em>correctness</em>, not merely to save qubits.
+    </p>
+    <table class="dt" id="damage-table"></table>
+  </section>
+
+  <section class="card">
+    <h2>How this is computed</h2>
+    <p class="note" style="margin-top:0">
+      <strong>Scenario B</strong> (<code>n_data + 2</code> qubits) is simulated in full: a real
+      complex state vector, Toffolis and phase gates applied amplitude by amplitude, with
+      <code>U&dagger;</code> built by reversing the gate list and negating phase angles.
+      Reduced density matrices come from a genuine partial trace; entropy comes from
+      eigenvalues (Jacobi rotation on the real embedding of the Hermitian matrix), not from a
+      closed-form shortcut.
+    </p>
+    <p class="note">
+      <strong>Scenario A</strong> needs <code>2^(n_data + 2N)</code> amplitudes, so it is
+      simulated in full only while that fits the browser budget
+      (<span id="budget-note"></span>). Beyond it, its reduced data state is obtained from an
+      exact structured model, valid here because every compute step is a classical reversible
+      Boolean map and every use is diagonal in the computational basis. Where both methods run,
+      the page checks them against each other and reports the deviation below.
+      <strong>Qubit counts are exact at every N</strong> &mdash; they are structural.
+    </p>
+    <p class="note">
+      This page uses its own seeded generator, so its predicates differ from the Python
+      benchmark's even at the same seed. The structural results (qubit counts, entropy
+      before/after, the basis-vs-superposition contrast) are the same either way.
+    </p>
+    <p id="selfcheck"></p>
+  </section>
+
+</div>
+<script src="app.js"></script>
+</body>
+</html>
