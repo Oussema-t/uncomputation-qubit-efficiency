@@ -240,6 +240,22 @@ python uncomputation_demo.py --help
 by default). Raising it extends the fully state-vector-verified range at the cost of
 memory; the shaded band in panel (a) of the figure always shows how far it reached.
 
+### Bit-identical reproduction
+
+All reported physical quantities are already bit-identical across runs. One
+diagnostic is not: `m1_m2_max_deviation` is a pure round-off residual (~5e-17)
+whose last digits move between runs, because multithreaded BLAS does not fix the
+summation order of the large matrix product inside `partial_trace`. To pin it:
+
+```bash
+OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 \
+VECLIB_MAXIMUM_THREADS=1 python uncomputation_demo.py
+```
+
+Verified: 3/3 single-threaded runs byte-identical, versus a differing 6th
+significant digit in that one field with threading on. This is floating-point
+summation order, not physics.
+
 ### The tests
 
 ```bash

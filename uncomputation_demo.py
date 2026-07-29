@@ -66,6 +66,14 @@ Reproducibility
 Every number this script prints is tagged with the seed and the library versions
 that produced it, and the same values are written to the results JSON.
 
+All reported physical quantities are bit-identical across runs. One diagnostic is
+not: ``m1_m2_max_deviation`` is a pure round-off residual (~5e-17) whose last few
+digits vary between runs, because multithreaded BLAS does not fix the reduction
+order of the large matrix product inside :func:`partial_trace`. Setting
+``OMP_NUM_THREADS=1`` (and the equivalents for the BLAS in use) makes every run
+byte-identical -- verified, 3/3 runs. This is a property of the floating-point
+summation order, not of the physics.
+
 Usage
 -----
     python uncomputation_demo.py
