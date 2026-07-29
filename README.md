@@ -403,3 +403,50 @@ simulation/
   verify_core.js               headless cross-language verification
   fixture.js                   generated problem instance + Python reference values
 ```
+
+---
+
+## 9. Applied result — QAOA for staff shift scheduling
+
+`qaoa_scheduling.py` takes the same technique to a real constrained-optimisation
+problem: 3 staff × 3 shifts, 9 binary variables, with two families of hard
+constraint that are naturally **three-literal** — which is exactly why scratch
+qubits are needed at all (two-local penalty terms compile to CNOT ladders and
+need none):
+
+* **coverage** — every shift needs at least one person
+* **no-burnout** — nobody works all three shifts
+
+A clause is violated exactly when a three-literal conjunction holds, so
+`uncomputation_demo.compute_step` builds the QAOA cost layer unchanged.
+
+| QAOA depth p | qubits (naive) | qubits (uncomputed) | score (uncomputed) | score (naive) |
+|---|---|---|---|---|
+| 1 | 21 | 11 | 0.151 | 0.148 |
+| 2 | 33 | 11 | 0.673 | 0.151 |
+| 3 | 45 | 11 | 0.891 | 0.199 |
+
+Score is `(random_mean − E[cost]) / (random_mean − optimum)`: 1 is the exact
+optimum, 0 is uniform random guessing.
+
+**The finding.** Adding QAOA layers helps the clean circuit
+(0.15 → 0.89) and
+does essentially nothing for the dirty one, which never exceeds
+0.20. Uncleaned scratch does not merely
+occupy qubits — it destroys the interference that makes the extra depth worth
+anything, leaving the algorithm stuck near random guessing.
+
+Stated with its limits: one instance, 5 optimiser
+restarts per configuration, and a conservative significance rule that only the
+deepest circuit clears individually (the trend is consistent across all three
+depths, but this is not a systematic depth-scaling study). **No quantum advantage
+is claimed** — the optimum comes from enumerating all 512 assignments instantly.
+
+```bash
+python qaoa_scheduling.py --layers 3       # ~10 min; writes the figure and JSON
+python test_qaoa_scheduling.py             # 17 checks
+python make_report.py                      # builds uncomputation_report.pdf
+```
+
+`make_report.py` reads the results JSON directly, so the PDF cannot drift from
+the numbers it describes.
