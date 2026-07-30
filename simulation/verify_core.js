@@ -21,6 +21,13 @@
 (function () {
   "use strict";
 
+  // `print` is a JavaScriptCore builtin but does not exist in Node. Define it so
+  // this file runs unmodified under both engines (see the README for both
+  // invocations). Prefer the engine's own print; fall back to console.log.
+  var print = (typeof globalThis !== "undefined" && globalThis.print)
+    ? globalThis.print
+    : (typeof console !== "undefined" ? console.log : function () {});
+
   var core = (typeof UncomputationCore !== "undefined")
     ? UncomputationCore
     : (typeof globalThis !== "undefined" ? globalThis.UncomputationCore : undefined);
