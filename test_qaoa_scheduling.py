@@ -10,6 +10,10 @@ Criteria fixed before implementation:
       see the note on test_w4 below)
   W5  the naive dephasing model matches a full state vector at p = 1
   W6  results are reported with their spread across optimiser restarts
+  W7  the naive dephasing model is ALSO exact at p = 2 and p = 3, checked on a
+      shrunk instance where the full multi-layer circuit is simulable -- this
+      closes the coverage gap that the real 33/45-qubit problem cannot close
+      directly, and it is the composition step the headline result depends on
 
 Plus: the classical problem encoding, the fast optimiser path against the real
 circuit, mixer unitarity, baseline sanity, and error handling.
@@ -27,14 +31,18 @@ import numpy as np
 
 from qaoa_scheduling import (
     ANCILLAS_PER_STEP,
+    HARD_PENALTY,
+    SHIFT_COST,
     Baselines,
     SchedulingProblem,
+    ancilla_wire_labels,
     apply_mixer_to_state,
     build_problem,
     clause_violations,
     compute_baselines,
     cost_vector,
     cross_check_naive_model,
+    data_wire_labels,
     describe_assignment,
     measure_widths,
     mixer_matrix,
@@ -43,10 +51,12 @@ from qaoa_scheduling import (
     probabilities_naive,
     probabilities_uncomputed,
     probabilities_uncomputed_circuit,
+    qaoa_circuit_naive,
     scratch_diagnostics,
+    simulate,
     verify_cost_layer,
 )
-from uncomputation_demo import basis_bit_table
+from uncomputation_demo import Step, basis_bit_table
 
 EXACT_TOL = 1e-9
 SEED = 20240517
@@ -185,6 +195,70 @@ def test_w5_naive_model_matches_full_statevector() -> None:
     deviation = cross_check_naive_model(problem, gamma=0.37, beta=0.21)
     assert deviation is not None, "cross-check was skipped; raise the qubit budget"
     assert deviation < EXACT_TOL, f"model deviates by {deviation:.3e}"
+
+
+def _small_instance() -> SchedulingProblem:
+    """A 4-variable, 2-clause instance small enough to simulate at depth 3.
+
+    The full naive circuit needs ``n_vars + 2 * n_clauses * p`` qubits, so the
+    real 9-variable / 6-clause problem is 33 qubits at p=2 and 45 at p=3 -- out
+    of reach. Here it is 12 and 16 qubits, fully simulable, exercising the
+    identical ``probabilities_naive`` code path. The two clauses share a variable
+    so their garbage classes are non-trivially correlated.
+    """
+    clauses = (
+        Step(qubits=(0, 1, 2), negations=(False, False, False), theta=HARD_PENALTY),
+        Step(qubits=(1, 2, 3), negations=(True, False, True), theta=HARD_PENALTY),
+    )
+    return SchedulingProblem(
+        n_staff=4, n_shifts=1, clauses=clauses,
+        clause_labels=("c0", "c1"), hard_penalty=HARD_PENALTY, shift_cost=SHIFT_COST,
+    )
+
+
+def _full_naive_data_probs(problem, gammas, betas):  # type: ignore[no-untyped-def]
+    """Data-register outcome distribution from the FULL naive state vector."""
+    per_layer = ANCILLAS_PER_STEP * len(problem.clauses)
+    n_anc = per_layer * len(gammas)
+    wires = data_wire_labels(problem.n_vars) + ancilla_wire_labels(n_anc)
+    state = simulate(qaoa_circuit_naive(problem, gammas, betas), wires)
+    tensor = state.reshape(2**problem.n_vars, 2**n_anc)
+    return np.sum(np.abs(tensor) ** 2, axis=1)
+
+
+def test_w7_naive_model_exact_at_depth_2_and_3() -> None:
+    """The dephasing model must be exact at p=2 and p=3, not just p=1.
+
+    This is the load-bearing composition step: the headline solution-quality
+    result comes from p=2 and p=3, where the real circuit cannot be simulated, so
+    the model's validity there is what the whole finding rests on. Checked on a
+    shrunk instance where the full multi-layer circuit IS simulable.
+    """
+    problem = _small_instance()
+    schedules = [([0.3, 0.5, 0.7][:p], [0.2, 0.15, 0.25][:p]) for p in (1, 2, 3)]
+    for gammas, betas in schedules:
+        model = probabilities_naive(problem, gammas, betas)
+        exact = _full_naive_data_probs(problem, gammas, betas)
+        deviation = float(np.max(np.abs(model - exact)))
+        assert deviation < EXACT_TOL, (
+            f"p={len(gammas)}: dephasing model deviates from the full state "
+            f"vector by {deviation:.3e}"
+        )
+
+
+def test_w7_teeth_the_model_actually_dephases() -> None:
+    """Guard against a vacuous pass: at these depths the naive (dephased) and
+    uncomputed (coherent) distributions must genuinely differ, so the p=2/p=3
+    agreement above is a real check of dephasing and not two identical trivia."""
+    problem = _small_instance()
+    for p in (2, 3):
+        gammas, betas = [0.3, 0.5, 0.7][:p], [0.2, 0.15, 0.25][:p]
+        naive = probabilities_naive(problem, gammas, betas)
+        clean = probabilities_uncomputed(problem, gammas, betas)
+        assert np.max(np.abs(naive - clean)) > 1e-2, (
+            f"p={p}: naive and uncomputed distributions are identical; the "
+            f"dephasing model is not exercising any dephasing"
+        )
 
 
 def test_fast_path_matches_the_real_circuit() -> None:

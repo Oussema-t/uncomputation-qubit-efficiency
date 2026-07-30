@@ -4,8 +4,9 @@
 Reads the JSON written by ``uncomputation_demo.py`` and ``qaoa_scheduling.py``
 and renders a print-ready HTML document, then converts it to PDF with headless
 Chrome. **Every number in the report is read from those files** -- nothing is
-transcribed by hand, so the report cannot drift away from the results it
-describes.
+transcribed by hand, which removes transcription error. (It does not by itself
+prevent a committed PDF from going stale: if the JSON is regenerated without
+rebuilding the PDF, the committed PDF lags. Regenerate both in the same step.)
 
     python uncomputation_demo.py
     python qaoa_scheduling.py --layers 3
@@ -203,64 +204,73 @@ def qaoa_section(data: Optional[Dict[str, Any]], figure: Optional[str]) -> str:
         for p in depths
     )
 
+    # Normaliser that converts a raw-cost spread into score units. Score is
+    # (random_mean - E[cost]) / (random_mean - optimum), so a cost std of sigma
+    # is a score std of sigma / spread_norm.
+    spread_norm = base["random_mean"] - base["optimum"]
+
+    def mean_score(rec: Dict[str, Any]) -> float:
+        # Older JSON may predate the mean fields; fall back to best.
+        return rec.get("mean_score", rec["score"])
+
     quality_rows = ""
     for p in depths:
         for scenario, label in (("uncomputed", "with uncomputation"),
                                 ("naive", "without uncomputation")):
             r = results[str(p)][scenario]
             css = "clean" if scenario == "uncomputed" else "garbage"
+            score_spread = r["cost_spread"] / spread_norm
             quality_rows += (
                 f"<tr><td>{p}</td><td class='{css}'>{label}</td>"
-                f"<td>{r['expected_cost']:.4f}</td>"
                 f"<td>{r['score']:.4f}</td>"
+                f"<td>{mean_score(r):.4f}</td>"
                 f"<td>{r['probability_optimal']:.4f}</td>"
-                f"<td>&plusmn;{r['cost_spread']:.4f}</td></tr>"
+                f"<td>&plusmn;{score_spread:.4f}</td></tr>"
             )
     quality_rows += (
         f"<tr class='baseline'><td>&mdash;</td><td>uniform random guessing</td>"
-        f"<td>{base['random_mean']:.4f}</td><td>0.0000</td>"
+        f"<td>0.0000</td><td>0.0000</td>"
         f"<td>{len(base['optimum_indices']) / 2 ** 9:.4f}</td><td>&mdash;</td></tr>"
     )
 
-    # Was the expected effect observed? Decide from the data, not from prose.
+    # Significance, in consistent (score) units on both sides. gap is a
+    # difference of scores; the noise floor is the larger restart spread
+    # converted to score units. (An earlier version compared the dimensionless
+    # gap against a raw-cost spread, which was ~spread_norm-times too strict.)
     verdict_rows = []
     for p in depths:
         unc = results[str(p)]["uncomputed"]
         naive = results[str(p)]["naive"]
         gap = unc["score"] - naive["score"]
-        noise = max(unc["cost_spread"], naive["cost_spread"])
-        significant = abs(gap) > noise
+        noise = max(unc["cost_spread"], naive["cost_spread"]) / spread_norm
+        ratio = abs(gap) / noise if noise > 0 else float("inf")
         verdict = (
             ("uncomputed better" if gap > 0 else "naive better")
-            if significant
-            else "no measurable difference"
+            if abs(gap) > noise
+            else "within noise"
         )
         verdict_rows.append(
             f"<tr><td>{p}</td><td>{gap:+.4f}</td><td>&plusmn;{noise:.4f}</td>"
-            f"<td class='txt'>{verdict}</td></tr>"
+            f"<td>{ratio:.1f}&times;</td><td class='txt'>{verdict}</td></tr>"
         )
 
-    # The per-depth comparison understates the effect; the signal is the trend.
     first, last = depths[0], depths[-1]
-    unc_trend = (
-        results[str(first)]["uncomputed"]["score"],
-        results[str(last)]["uncomputed"]["score"],
-    )
-    naive_trend = (
-        results[str(first)]["naive"]["score"],
-        results[str(last)]["naive"]["score"],
-    )
+    unc_first = results[str(first)]["uncomputed"]["score"]
+    unc_last = results[str(last)]["uncomputed"]["score"]
+    naive_first = results[str(first)]["naive"]["score"]
+    naive_last = results[str(last)]["naive"]["score"]
     naive_ceiling = max(results[str(p)]["naive"]["score"] for p in depths)
+    gap_first = unc_first - naive_first
     trend_html = f"""
 <table>
 <tr><th class="txt">Scenario</th><th>Score at p = {first}</th>
 <th>Score at p = {last}</th><th class="txt">Behaviour with depth</th></tr>
-<tr><td class="clean">with uncomputation</td><td>{unc_trend[0]:.4f}</td>
-<td>{unc_trend[1]:.4f}</td>
-<td class="txt">improves toward the optimum</td></tr>
-<tr><td class="garbage">without uncomputation</td><td>{naive_trend[0]:.4f}</td>
-<td>{naive_trend[1]:.4f}</td>
-<td class="txt">flat, never exceeds {naive_ceiling:.2f}</td></tr>
+<tr><td class="clean">with uncomputation</td><td>{unc_first:.4f}</td>
+<td>{unc_last:.4f}</td>
+<td class="txt">already strong at p = {first}; improves with depth</td></tr>
+<tr><td class="garbage">without uncomputation</td><td>{naive_first:.4f}</td>
+<td>{naive_last:.4f}</td>
+<td class="txt">flat, never exceeds {naive_ceiling:.2f} at any depth</td></tr>
 </table>"""
 
     figure_html = (
@@ -314,44 +324,59 @@ width grows with depth. With uncomputation it is constant.</p>
 
 <h3>4.3 Solution quality</h3>
 <p>The exact optimum is cost {base['optimum']:.1f}, found by enumerating all 512
-assignments ({len(base['optimum_indices'])} rosters achieve it). Spread is the
-standard deviation across {meta['restarts']} optimiser restarts &mdash; a single
-run is an anecdote.</p>
+assignments ({len(base['optimum_indices'])} rosters achieve it). Score is
+normalised so 1 is that optimum and 0 is uniform random guessing. Two score
+columns are shown: <em>best</em> is the best of {meta['restarts']} optimiser
+restarts (what a user who ran it would keep); <em>mean</em> is the average across
+restarts (a fairer scenario-to-scenario comparison, since the two landscapes have
+very different numbers of local minima). Spread is the restart standard deviation
+in score units.</p>
 <table>
-<tr><th>p</th><th>Scenario</th><th>E[cost]</th><th>Score</th>
+<tr><th>p</th><th>Scenario</th><th>Score (best)</th><th>Score (mean)</th>
 <th>P(optimal)</th><th>Spread</th></tr>
 {quality_rows}
 </table>
 
 <h3>4.4 Does the garbage change the answers?</h3>
-<p>The hypothesis was that leftover scratch would <em>degrade</em> QAOA's
-answers, because it dephases the interference the mixer depends on. Judging each
-depth on its own, against the restart-to-restart spread:</p>
+<p>Yes &mdash; decisively, and at every depth. The dirty circuit is stuck near
+random guessing (score {naive_first:.2f}&ndash;{naive_ceiling:.2f}) no matter how
+many layers it is given; the clean circuit already beats it by a wide margin at
+p&nbsp;=&nbsp;{first} and improves with depth:</p>
+{trend_html}
+<p>Judged at each depth against the restart spread &mdash; both quantities now in
+the same (score) units:</p>
 <table>
 <tr><th>p</th><th>Score gap (uncomputed &minus; naive)</th><th>Noise floor</th>
-<th class="txt">Verdict</th></tr>
+<th>Gap / noise</th><th class="txt">Verdict</th></tr>
 {''.join(verdict_rows)}
 </table>
-<p class="note">The noise floor is the larger of the two restart spreads, which
-is deliberately conservative: it reflects how much the classical optimiser
-varies between starting points, not uncertainty in the reported value.</p>
 
-<p>Judged depth by depth, the effect only clears that bar at the deepest circuit.
-But the per-depth view understates it, because the signal is in how each scenario
-<em>responds to depth</em>:</p>
-{trend_html}
-<p><strong>This is the finding.</strong> Adding QAOA layers helps the clean
-circuit and does essentially nothing for the dirty one: uncleaned scratch leaves
-the algorithm stuck near random guessing no matter how much depth is spent on it.
-The garbage is not merely occupying qubits &mdash; it is destroying the
-interference that makes the extra layers worth anything.</p>
+<p><strong>This is the finding.</strong> Uncleaned scratch does not merely occupy
+qubits &mdash; it destroys the interference the mixer depends on, and no amount of
+depth recovers it. Cleaning it with <em>U&dagger;</em> makes the algorithm work:
+the effect is a large, significant gap at <em>every</em> depth, present already at
+a single layer ({gap_first:+.2f} at p&nbsp;=&nbsp;{first}), not something that
+emerges only once the circuit is deep.</p>
 
-<p class="note">Stated with its limits: one instance, one problem family,
-{meta['restarts']} restarts per configuration, and a conservative significance
-rule that only one depth clears individually. The trend is consistent across all
-three depths, but this is not a systematic study of depth scaling. The
-qubit-width result in &sect;4.1 is independent of all of this &mdash; it is
-structural and exact.</p>
+<div class="caveat">
+<p><strong>A correction, stated plainly.</strong> An earlier version of this study
+reported the p&nbsp;=&nbsp;1 uncomputed score as ~0.15 and framed the result as
+&ldquo;quality climbs from near-random with depth&rdquo;. That p&nbsp;=&nbsp;1
+figure was an <em>optimiser artifact</em>: at too few restarts the classical
+optimiser fell into a local minimum. An independent audit caught it, and a
+brute-force parameter grid confirms the true p&nbsp;=&nbsp;1 optimum is ~0.63. The
+honest story is the one above &mdash; the clean circuit is strong from the first
+layer &mdash; which is a <em>stronger</em> correctness claim, not a weaker one.
+The results here use enough restarts ({meta['restarts']}) that every
+configuration converges.</p>
+</div>
+
+<p class="note">Stated with its limits: one problem instance, one clause family,
+{meta['restarts']} restarts per configuration. The naive-stuck / clean-works
+contrast reproduces across independent random instances; the specific depth trend
+is instance-dependent. No quantum advantage is claimed &mdash; the optimum is
+found classically by enumerating 512 assignments. The qubit-width result in
+&sect;4.1 is independent of all of this: it is structural and exact.</p>
 """
 
 
@@ -529,9 +554,11 @@ not the source of any number reported above.
 <footer>
 Generated by <code>make_report.py</code> directly from
 <code>benchmark_results.json</code> and <code>qaoa_results.json</code> &mdash;
-every figure in this document is read from those files rather than transcribed.
-QAOA depth studied: p = 1&ndash;{qmeta.get('layers', '?')},
-{qmeta.get('restarts', '?')} optimiser restarts per configuration.
+every figure is read from those files rather than typed in by hand. (This
+removes transcription error, but a committed PDF can still be stale if the JSON
+is regenerated without rebuilding it; regenerate both together.) QAOA depth
+studied: p = 1&ndash;{qmeta.get('layers', '?')}, {qmeta.get('restarts', '?')}
+optimiser restarts per configuration.
 </footer>
 
 </body></html>

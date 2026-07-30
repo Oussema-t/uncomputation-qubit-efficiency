@@ -112,24 +112,46 @@ from uncomputation_demo import (
 LOGGER = logging.getLogger("qaoa_scheduling")
 
 # --------------------------------------------------------------------------
-# Configuration. Documented, overridable defaults -- nothing here is tuned to
-# make a result come out a particular way; every value is exposed on the CLI.
+# Configuration. Documented, overridable defaults, every value exposed on the CLI.
+#
+# A note on tuning, because an earlier version of this file wrongly claimed
+# "nothing here is tuned". An external audit showed that the QAOA parameter
+# optimiser (COBYLA) has local minima on this problem, and that the p=1
+# uncomputed result in particular was sensitive to DEFAULT_RESTARTS, the COBYLA
+# rhobeg, and HARD_PENALTY: at only 6 restarts the optimiser landed in a bad
+# basin (score 0.15) while the true optimum is 0.63. That was an
+# under-optimisation artifact, not a property of the algorithm. The restart
+# count below is now set well past where every configuration converges (a
+# brute-force grid confirms the p=1 optimum, and results are stable from ~12
+# restarts through at least 48). The headline conclusions do NOT depend on the
+# other constants once the optimiser actually converges; see the README's QAOA
+# section for the sensitivity analysis.
 # --------------------------------------------------------------------------
 
 DEFAULT_N_STAFF: int = 3
 DEFAULT_N_SHIFTS: int = 3
 DEFAULT_LAYERS: int = 1
-DEFAULT_RESTARTS: int = 6
+#: Independent optimiser restarts. Set well past convergence: at 6 the p=1
+#: uncomputed case fell into a local minimum (score 0.15 vs the true 0.63); it
+#: is stable from ~12 through 48. 16 leaves a margin.
+DEFAULT_RESTARTS: int = 16
 DEFAULT_SEED: int = 20240517
 
 #: Penalty weight for violating a hard constraint, relative to the soft
 #: preference costs below. Must dominate them or the optimum would be allowed to
-#: buy its way out of a hard constraint.
+#: buy its way out of a hard constraint. The headline result is insensitive to
+#: this once the optimiser converges (swept 2.0-10.0; see the README).
 HARD_PENALTY: float = 4.0
 
 #: Cost of assigning one person to one shift (the soft objective: use as little
 #: staff time as possible while still covering every shift).
 SHIFT_COST: float = 1.0
+
+#: COBYLA initial step size. Set to the SciPy library default rather than a
+#: hand-picked value: the audit found 0.35 (a previous choice) sits in a band
+#: that traps the p=1 optimiser, whereas 1.0 converges to the true optimum even
+#: at low restart counts.
+COBYLA_RHOBEG: float = 1.0
 
 #: Cap on the full state-vector cross-check of the naive scenario.
 #: 2**22 complex128 = 64 MiB.
@@ -647,12 +669,16 @@ def probabilities_naive(
         rho = apply_mixer_to_density(problem.n_vars, beta, rho)
 
     probabilities = np.real(np.diag(rho))
-    total = probabilities.sum()
-    if abs(total - 1.0) > 1e-8:
+    if abs(probabilities.sum() - 1.0) > 1e-8:
         raise RuntimeError(
-            f"naive model lost normalisation: total probability {total:.12f}"
+            f"naive model lost normalisation: total probability "
+            f"{probabilities.sum():.12f}"
         )
-    return np.clip(probabilities, 0.0, None) / total
+    # Clip sub-round-off negatives, then renormalise by the CLIPPED total, so the
+    # returned distribution sums to exactly 1 even when clipping removed mass.
+    # (Normalising by the pre-clip total would leave it slightly off 1.)
+    clipped = np.clip(probabilities, 0.0, None)
+    return clipped / clipped.sum()
 
 
 def cross_check_naive_model(
@@ -786,6 +812,21 @@ class OptimisationResult:
             return float("nan")
         return float(np.std(self.per_restart_costs))
 
+    @property
+    def mean_expected_cost(self) -> float:
+        """Mean E[cost] across restarts.
+
+        Reported alongside the best-of-N value because best-of-N is a biased
+        estimator: it is pulled down by an amount that grows with the spread, and
+        the two scenarios here have very different spreads (the uncomputed arm has
+        several local minima, the naive arm almost none). The mean is a fairer
+        basis for the scenario-to-scenario comparison; the best is what a user who
+        actually runs the optimiser would keep.
+        """
+        if not self.per_restart_costs:
+            return float("nan")
+        return float(np.mean(self.per_restart_costs))
+
 
 def optimise(
     problem: SchedulingProblem,
@@ -835,7 +876,7 @@ def optimise(
             objective,
             start,
             method="COBYLA",
-            options={"maxiter": max_iterations, "rhobeg": 0.35},
+            options={"maxiter": max_iterations, "rhobeg": COBYLA_RHOBEG},
         )
         per_restart.append(float(outcome.fun))
         LOGGER.debug(
@@ -952,21 +993,23 @@ def print_report(
     print("    score: 1 = optimum, 0 = no better than uniform random guessing")
     header = (
         f"{'p':>3}  {'scenario':>11}  {'E[cost]':>9}  {'score':>7}  "
-        f"{'P(optimal)':>10}  {'spread':>7}"
+        f"{'mean sc':>7}  {'P(optimal)':>10}  {'spread':>7}"
     )
     print(header)
+    print("    (score = best of restarts; mean sc = mean over restarts)")
     print("-" * len(header))
     for layers in sorted(results):
         for scenario in ("uncomputed", "naive"):
             r = results[layers][scenario]
+            mean_score = normalised_score(r.mean_expected_cost, baselines)
             print(
                 f"{layers:>3}  {scenario:>11}  {r.expected_cost:>9.4f}  "
-                f"{r.score:>7.4f}  {r.probability_optimal:>10.4f}  "
-                f"{r.cost_spread:>7.4f}"
+                f"{r.score:>7.4f}  {mean_score:>7.4f}  "
+                f"{r.probability_optimal:>10.4f}  {r.cost_spread:>7.4f}"
             )
         print(
             f"{'':>3}  {'random':>11}  {baselines.random_mean:>9.4f}  "
-            f"{0.0:>7.4f}  "
+            f"{0.0:>7.4f}  {0.0:>7.4f}  "
             f"{len(baselines.optimum_indices) / 2 ** problem.n_vars:>10.4f}  "
             f"{'-':>7}"
         )
@@ -1114,6 +1157,7 @@ def run(
         "layers": layers,
         "restarts": restarts,
         "optimiser_maxiter": max_iterations,
+        "optimiser_rhobeg": COBYLA_RHOBEG,
         "max_sim_qubits": max_sim_qubits,
         "hard_penalty": problem.hard_penalty,
         "shift_cost": problem.shift_cost,
@@ -1193,6 +1237,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 scenario: {
                     "expected_cost": r.expected_cost,
                     "score": r.score,
+                    "mean_expected_cost": r.mean_expected_cost,
+                    "mean_score": normalised_score(
+                        r.mean_expected_cost, baselines
+                    ),
                     "probability_optimal": r.probability_optimal,
                     "best_params": list(r.best_params),
                     "per_restart_costs": list(r.per_restart_costs),
