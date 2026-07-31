@@ -181,6 +181,201 @@ Python one to ~1e-15.</p>
 """
 
 
+def _toffoli_svg(x: float, ctrl_ys: Sequence[float], target_y: float,
+                 color: str) -> str:
+    """A Toffoli gate: filled control dots, an open target, a connecting line."""
+    ys = list(ctrl_ys) + [target_y]
+    parts = [
+        f'<line x1="{x}" y1="{min(ys)}" x2="{x}" y2="{max(ys)}" '
+        f'stroke="{color}" stroke-width="1.8"/>'
+    ]
+    for cy in ctrl_ys:
+        parts.append(f'<circle cx="{x}" cy="{cy}" r="4.6" fill="{color}"/>')
+    parts.append(
+        f'<circle cx="{x}" cy="{target_y}" r="10" fill="#ffffff" '
+        f'stroke="{color}" stroke-width="1.8"/>'
+        f'<line x1="{x - 10}" y1="{target_y}" x2="{x + 10}" y2="{target_y}" '
+        f'stroke="{color}" stroke-width="1.8"/>'
+        f'<line x1="{x}" y1="{target_y - 10}" x2="{x}" y2="{target_y + 10}" '
+        f'stroke="{color}" stroke-width="1.8"/>'
+    )
+    return "".join(parts)
+
+
+def circuit_architecture_html() -> str:
+    """Static, faithful diagram of the QAOA circuit and its named layers.
+
+    Reflects the actual gate sequence in ``qaoa_circuit_uncomputed`` /
+    ``cost_layer_uncomputed`` / ``compute_step`` -- not a stylised sketch:
+
+      state prep   H on every data qubit
+      cost layer   per clause: compute (2 Toffolis into t,r) -> phase on r ->
+                   uncompute (adjoint); then a workload phase on each data qubit
+      mixer        RX(2 beta) on every data qubit
+      repeat cost+mixer for l = 1..p, then measure.
+    """
+    mono = 'font-family="ui-monospace, Menlo, monospace"'
+    sans = 'font-family="-apple-system, Helvetica, Arial, sans-serif"'
+
+    # ---- Diagram A: block-level ansatz -----------------------------------
+    a = f'''<svg viewBox="0 0 860 210" width="100%" role="img"
+      aria-label="QAOA ansatz block diagram">
+  <line x1="150" y1="72" x2="744" y2="72" stroke="{INK}" stroke-width="1.5"/>
+  <line x1="150" y1="150" x2="744" y2="150" stroke="{INK}" stroke-width="1.5"/>
+  <text x="10" y="69" {sans} font-size="12" fill="{INK}">data</text>
+  <text x="10" y="84" {mono} font-size="10" fill="{MUTED}">|0&#10217;<tspan
+      baseline-shift="super" font-size="7">&#8855;9</tspan></text>
+  <text x="10" y="147" {sans} font-size="12" fill="{INK}">scratch</text>
+  <text x="10" y="162" {mono} font-size="10" fill="{MUTED}">|0&#10217;<tspan
+      baseline-shift="super" font-size="7">&#8855;2</tspan></text>
+
+  <rect x="158" y="56" width="40" height="32" rx="4" fill="#fbfbf9"
+    stroke="{INK}" stroke-width="1.6"/>
+  <text x="178" y="77" {mono} font-size="14" fill="{INK}"
+    text-anchor="middle">H</text>
+  <text x="178" y="104" {sans} font-size="9.5" fill="{MUTED}"
+    text-anchor="middle">state prep</text>
+
+  <rect x="226" y="40" width="392" height="150" rx="7" fill="none"
+    stroke="{MUTED}" stroke-width="1.1" stroke-dasharray="4 3"/>
+  <text x="422" y="34" {sans} font-size="10.5" fill="{MUTED}"
+    text-anchor="middle">repeat &#215; p layers</text>
+
+  <rect x="250" y="50" width="120" height="112" rx="5" fill="#fdf1ec"
+    stroke="{GARBAGE}" stroke-width="1.8"/>
+  <text x="310" y="99" {mono} font-size="14" fill="{INK}"
+    text-anchor="middle">U<tspan baseline-shift="sub"
+    font-size="10">C</tspan>(&#947;<tspan baseline-shift="sub"
+    font-size="10">&#8467;</tspan>)</text>
+  <text x="310" y="118" {sans} font-size="9.5" fill="{GARBAGE}"
+    text-anchor="middle">cost layer</text>
+
+  <text x="392" y="146" {mono} font-size="10" fill="{MUTED}">|0&#10217;</text>
+
+  <rect x="442" y="52" width="120" height="40" rx="5" fill="#eef4fb"
+    stroke="{CLEAN}" stroke-width="1.8"/>
+  <text x="502" y="70" {mono} font-size="14" fill="{INK}"
+    text-anchor="middle">U<tspan baseline-shift="sub"
+    font-size="10">B</tspan>(&#946;<tspan baseline-shift="sub"
+    font-size="10">&#8467;</tspan>)</text>
+  <text x="502" y="84" {sans} font-size="9" fill="{CLEAN}"
+    text-anchor="middle">mixer</text>
+
+  <rect x="650" y="56" width="44" height="32" rx="4" fill="#fbfbf9"
+    stroke="{INK}" stroke-width="1.6"/>
+  <path d="M660 80 A12 12 0 0 1 684 80" fill="none" stroke="{INK}"
+    stroke-width="1.4"/>
+  <line x1="672" y1="80" x2="682" y2="62" stroke="{INK}" stroke-width="1.4"/>
+  <text x="672" y="104" {sans} font-size="9.5" fill="{MUTED}"
+    text-anchor="middle">measure</text>
+</svg>'''
+
+    # ---- Diagram B: inside one cost layer, one clause --------------------
+    la, lb, lc, t, r = 46, 80, 114, 162, 200
+    g1, g2, g3, g4, g5 = 214, 300, 392, 484, 570
+    wires = "".join(
+        f'<line x1="150" y1="{y}" x2="700" y2="{y}" stroke="{INK}" '
+        f'stroke-width="1.4"/>'
+        for y in (la, lb, lc, t, r)
+    )
+    labels = "".join(
+        f'<text x="14" y="{y + 4}" {mono} font-size="11" fill="{fill}">{lab}</text>'
+        for y, lab, fill in (
+            (la, "&#8467;<tspan baseline-shift='sub' font-size='8'>a</tspan>", INK),
+            (lb, "&#8467;<tspan baseline-shift='sub' font-size='8'>b</tspan>", INK),
+            (lc, "&#8467;<tspan baseline-shift='sub' font-size='8'>c</tspan>", INK),
+            (t, "t  |0&#10217;", MUTED),
+            (r, "r  |0&#10217;", MUTED),
+        )
+    )
+    b = f'''<svg viewBox="0 0 860 262" width="100%" role="img"
+      aria-label="Cost-layer internals for one clause">
+  {wires}
+  <line x1="150" y1="138" x2="700" y2="138" stroke="{RULE}" stroke-width="1"
+    stroke-dasharray="3 3"/>
+  <text x="704" y="{(la + lc) / 2 + 4}" {sans} font-size="9.5" fill="{MUTED}">3
+    literals</text>
+  <text x="704" y="{(t + r) / 2 + 4}" {sans} font-size="9.5" fill="{MUTED}">scratch
+    (t, r)</text>
+  {labels}
+
+  {_toffoli_svg(g1, [la, lb], t, GARBAGE)}
+  {_toffoli_svg(g2, [t, lc], r, GARBAGE)}
+
+  <rect x="{g3 - 13}" y="{r - 13}" width="26" height="26" rx="4" fill="#ffffff"
+    stroke="{INK}" stroke-width="1.7"/>
+  <text x="{g3}" y="{r + 4}" {mono} font-size="12" fill="{INK}"
+    text-anchor="middle">P</text>
+
+  {_toffoli_svg(g4, [t, lc], r, CLEAN)}
+  {_toffoli_svg(g5, [la, lb], t, CLEAN)}
+
+  <line x1="176" y1="228" x2="326" y2="228" stroke="{GARBAGE}"
+    stroke-width="1.6"/>
+  <text x="251" y="244" {sans} font-size="10" fill="{GARBAGE}"
+    text-anchor="middle">compute U<tspan baseline-shift="sub"
+    font-size="8">k</tspan></text>
+  <line x1="366" y1="228" x2="418" y2="228" stroke="{INK}" stroke-width="1.6"/>
+  <text x="392" y="244" {sans} font-size="10" fill="{INK}"
+    text-anchor="middle">use</text>
+  <line x1="458" y1="228" x2="608" y2="228" stroke="{CLEAN}"
+    stroke-width="1.6"/>
+  <text x="533" y="244" {sans} font-size="10" fill="{CLEAN}"
+    text-anchor="middle">uncompute U<tspan baseline-shift="sub"
+    font-size="8">k</tspan>&#8224;</text>
+</svg>'''
+
+    return f'''
+<h3>4.1 Circuit architecture and named layers</h3>
+<p>The ansatz is the standard QAOA form (Farhi, Goldstone &amp; Gutmann,
+arXiv:1411.4028), with the cost layer built by the compute&ndash;use&ndash;
+uncompute motif from Result&nbsp;1. The diagram below is the actual gate
+sequence in <code>qaoa_circuit_uncomputed</code>, not a stylised sketch.</p>
+
+<figure>{a}<figcaption>Figure 2 &mdash; QAOA ansatz, block level. The data
+register is prepared in uniform superposition, then <em>p</em> repetitions of a
+cost layer and a mixer are applied before measurement. The scratch register is
+borrowed and returned <em>inside</em> each cost layer, so it never enters the
+mixer &mdash; which is exactly why one pair suffices at any depth.</figcaption>
+</figure>
+
+<p><strong>The named layers</strong>, in order:</p>
+<table>
+<tr><th class="txt">Layer</th><th class="txt">Operator</th>
+<th class="txt">What it does</th></tr>
+<tr><td class="txt">State preparation</td>
+<td class="txt"><code>H</code><sup>&#8855;9</sup></td>
+<td class="txt">equal superposition over all 512 assignments</td></tr>
+<tr><td class="txt">Cost layer <code>U_C(&#947;&#8467;)</code></td>
+<td class="txt">exp(&#8722;i&#947;&#8467;&#183;C(x))</td>
+<td class="txt">phases each assignment by its cost, via clause oracles + a
+one-local workload phase</td></tr>
+<tr><td class="txt">Mixer <code>U_B(&#946;&#8467;)</code></td>
+<td class="txt">&#8719;<tspan>j</tspan> RX(2&#946;&#8467;)</td>
+<td class="txt">transverse-field driver that mixes amplitude between
+assignments</td></tr>
+<tr><td class="txt">(repeat cost + mixer for &#8467; = 1&#8230;p)</td>
+<td class="txt">&mdash;</td>
+<td class="txt">depth <em>p</em> sets the expressiveness</td></tr>
+<tr><td class="txt">Measurement</td><td class="txt">Z basis</td>
+<td class="txt">sample a candidate roster</td></tr>
+</table>
+
+<p>Inside the cost layer, each of the 6 three-literal clauses is applied as a
+compute&ndash;use&ndash;uncompute block, then reused for the next clause:</p>
+
+<figure>{b}<figcaption>Figure 3 &mdash; One clause inside the cost layer, on its
+three literal wires and the shared scratch pair (t, r). Orange: two Toffolis
+compute the clause violation into scratch (t = &#8467;<tspan>a</tspan> &and;
+&#8467;<tspan>b</tspan>, then r = t &and; &#8467;<tspan>c</tspan>). Black: a phase
+gate kicks back the penalty on r. Blue: the adjoint Toffolis uncompute, returning
+(t, r) to |00&#10217; so the next clause reuses them. Signed literals add an X
+before and after on negated inputs (omitted for clarity). Every data qubit also
+receives a one-local workload phase P(&#8722;&#947;&#183;w) once per cost
+layer.</figcaption></figure>
+'''
+
+
 def qaoa_section(data: Optional[Dict[str, Any]], figure: Optional[str]) -> str:
     """Render the QAOA section from qaoa_results.json."""
     if data is None:
@@ -275,7 +470,7 @@ def qaoa_section(data: Optional[Dict[str, Any]], figure: Optional[str]) -> str:
 
     figure_html = (
         f"<figure><img src='{figure}' alt='QAOA comparison'>"
-        f"<figcaption>Figure 2 &mdash; Circuit width against QAOA depth (left) "
+        f"<figcaption>Figure 4 &mdash; Circuit width against QAOA depth (left) "
         f"and solution quality against the same depth (right). A score of 1 is "
         f"the exact optimum; 0 is uniform random guessing.</figcaption></figure>"
         if figure
@@ -296,9 +491,11 @@ CNOT ladders and need none:</p>
 <p>A clause is violated exactly when a three-literal conjunction holds, so the
 same compute subroutine from Result 1 builds the QAOA cost layer unchanged.</p>
 
+{circuit_architecture_html()}
+
 {figure_html}
 
-<h3>4.1 Circuit width</h3>
+<h3>4.2 Circuit width</h3>
 <p>Without cleanup, every clause in every layer needs its own scratch pair, so
 width grows with depth. With uncomputation it is constant.</p>
 <table>
@@ -307,7 +504,7 @@ width grows with depth. With uncomputation it is constant.</p>
 {width_rows}
 </table>
 
-<h3>4.2 Correctness of the cost layer</h3>
+<h3>4.3 Correctness of the cost layer</h3>
 <table>
 <tr><th class="txt">Check</th><th>Result</th></tr>
 <tr><td>Cost layer vs exp(&minus;i&gamma;C(x)) from the classical model</td>
@@ -322,7 +519,7 @@ width grows with depth. With uncomputation it is constant.</p>
 <td>{fmt(diag.get('fast_path_deviation'))}</td></tr>
 </table>
 
-<h3>4.3 Solution quality</h3>
+<h3>4.4 Solution quality</h3>
 <p>The exact optimum is cost {base['optimum']:.1f}, found by enumerating all 512
 assignments ({len(base['optimum_indices'])} rosters achieve it). Score is
 normalised so 1 is that optimum and 0 is uniform random guessing. Two score
@@ -337,7 +534,7 @@ in score units.</p>
 {quality_rows}
 </table>
 
-<h3>4.4 Does the garbage change the answers?</h3>
+<h3>4.5 Does the garbage change the answers?</h3>
 <p>Yes &mdash; decisively, and at every depth. The dirty circuit is stuck near
 random guessing (score {naive_first:.2f}&ndash;{naive_ceiling:.2f}) no matter how
 many layers it is given; the clean circuit already beats it by a wide margin at
