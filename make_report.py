@@ -732,6 +732,39 @@ a different circuit class could behave differently.</li>
 states). Entropy is in bits.</li>
 </ul>
 
+<h3>5.1 Where this advantage applies (and where it does not)</h3>
+<p>Uncomputation reclaims <strong>scratch qubits</strong>, and scratch is needed
+only for an intermediate that <strong>cannot be undone in place</strong>. That is
+the whole rule:</p>
+<p class="note" style="font-size:10.5pt;color:#111">
+<strong>XOR / parity uncomputes in place and costs no ancilla; AND needs a scratch
+qubit &mdash; and reclaiming it is the entire advantage.</strong></p>
+<table>
+<tr><th class="txt">Subroutine</th><th class="txt">Boolean structure</th>
+<th class="txt">Uncomputation payoff</th></tr>
+<tr><td class="txt">Grover oracle, k&#8805;3 QAOA constraints (this report)</td>
+<td class="txt">clause <strong>AND</strong> (Toffoli)</td>
+<td class="txt">large; often required for correctness</td></tr>
+<tr><td class="txt">Quantum arithmetic, Shor, QPE / LCU</td>
+<td class="txt">carries / block-encoding <strong>AND</strong></td>
+<td class="txt">yes, mandatory</td></tr>
+<tr><td class="txt">VQE &mdash; hardware-efficient ansatz</td>
+<td class="txt">rotations + CNOTs, no oracle</td>
+<td class="txt"><strong>none</strong> (zero ancillas)</td></tr>
+<tr><td class="txt">VQE &mdash; UCCSD / Hamiltonian-variational</td>
+<td class="txt">exp(&#8722;i&#952;&#183;P) = <strong>XOR</strong> parity</td>
+<td class="txt"><strong>none</strong> (uncomputes in place)</td></tr>
+<tr><td class="txt">QAOA on 2-local (plain MaxCut)</td>
+<td class="txt">ZZ = <strong>XOR</strong></td>
+<td class="txt"><strong>none</strong> (in place)</td></tr>
+</table>
+<p>The dividing line is not &ldquo;QAOA vs VQE&rdquo; &mdash; it runs
+<em>through</em> QAOA, which shows the advantage on k&#8805;3 constraint clauses
+and none on 2-local MaxCut. It is the Boolean structure of the oracle, not the
+name of the algorithm, that decides. Standard VQE has no oracle to clean; a VQE
+variant shows the advantage only by adding an AND-type oracle, at which point it
+is that oracle benefiting, by the mechanism shown here.</p>
+
 <h2>6. References</h2>
 <p class="note">
 C. H. Bennett, &ldquo;Logical reversibility of computation&rdquo;, <em>IBM

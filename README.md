@@ -471,3 +471,61 @@ python make_report.py                      # builds uncomputation_report.pdf
 `make_report.py` reads the results JSON directly, which removes transcription
 error. Regenerate the PDF in the same step as the JSON, or a committed PDF can
 still lag behind the numbers.
+
+---
+
+## 10. When uncomputation helps — and when it does not
+
+A natural next question is whether the same advantage shows up in **VQE**. The
+honest answer is **no, not in standard VQE** — and the reason is precise enough to
+state as a rule, so it is worth writing down rather than demonstrating with a
+benchmark that would only ever print "0 qubits saved".
+
+Uncomputation reclaims **scratch qubits**. Scratch is needed only when the circuit
+must hold an intermediate value that **cannot be undone in place**. That splits
+every subroutine cleanly:
+
+| Intermediate | Reversible in place? | Needs scratch? | Uncomputation payoff |
+|---|---|---|---|
+| Parity / XOR of several bits (CNOT ladder) | **yes** | no | none — the "uncompute" is free, on the same wire |
+| Single-qubit rotation, basis change | yes | no | none |
+| AND / OR / majority of several bits (Toffoli) | **no** | **yes** | **reclaims the scratch** |
+| Classical arithmetic (carries) | no | yes | reclaims the scratch |
+
+The one-line version:
+
+> **XOR uncomputes in place and costs no ancilla; AND needs a scratch qubit — and
+> reclaiming that scratch is the whole advantage.**
+
+That rule places every algorithm without having to run it:
+
+| Algorithm / subroutine | Boolean structure | Uncomputation advantage |
+|---|---|---|
+| Grover oracle (SAT, search) | multi-literal clause **AND** | large — and **required for correctness** (the diffusion step needs clean ancilla) |
+| QAOA on **k ≥ 3** constraints | clause **AND** (Toffoli) | yes — width `O(#clauses · p) → O(1)`; **this repo** |
+| Quantum arithmetic, Shor mod-exp | carries (**AND**) | mandatory throughout |
+| QPE / qubitization / LCU (chemistry) | block-encoding ancillas | yes |
+| **VQE — hardware-efficient ansatz** | rotations + CNOTs, no oracle | **none** (zero ancillas) |
+| **VQE — UCCSD / Pauli-string HVA** | `exp(−iθ·P)` = **XOR** parity rotation | **none** (uncomputes in place, no extra qubit) |
+| QAOA on **2-local** (plain MaxCut) | `ZZ` = **XOR** | **none** (in place) |
+
+Two things this table makes honest that a single benchmark would hide:
+
+1. **The dividing line is not "QAOA vs VQE".** It runs *through* QAOA: the same
+   algorithm shows a large advantage on k ≥ 3 constraint clauses (this repo) and
+   **none** on 2-local MaxCut, because `ZZ` is XOR-type and uncomputes in place.
+   It is the Boolean structure of the oracle, not the name of the algorithm, that
+   decides.
+
+2. **Standard VQE has no oracle to clean.** Its ansätze act directly on the
+   register (hardware-efficient) or apply `exp(−iθ·Pauli-string)` as an in-place
+   parity rotation (UCCSD, Hamiltonian-variational). Both are ancilla-free, so
+   there is nothing for `U†` to reclaim. A VQE variant *can* show the advantage —
+   but only by bolting on an AND-type oracle (a coherently-enforced k ≥ 3
+   constraint, or a block-encoded / LCU energy measurement), at which point it is
+   the *oracle* that benefits, by exactly the mechanism demonstrated here, not
+   anything specific to VQE.
+
+This is a scope statement, not a limitation of the technique: uncomputation is
+universal for **AND-type / arithmetic** subroutines and simply not applicable
+where the computation is already reversible in place.
